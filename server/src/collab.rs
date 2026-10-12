@@ -18,6 +18,9 @@ pub async fn invite_collaborator(
     jar: SignedCookieJar,
     Json(payload): Json<InviteRequest>,
 ) -> Result<Json<Invitation>, (StatusCode, String)> {
+    if payload.role != "viewer" && payload.role != "editor" {
+        return Err((StatusCode::BAD_REQUEST, "Invalid collaborator role".into()));
+    }
     let inviter_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
 
@@ -59,6 +62,7 @@ pub async fn invite_collaborator(
             created_at: chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string(),
             expires_at: None,
         };
+        crate::access_changed(&state, &doc_id).await;
         Ok(Json(inv))
     } else {
         Err((StatusCode::NOT_FOUND, "User with that email not found".to_string()))
@@ -176,6 +180,7 @@ pub async fn remove_collaborator(
         return Err((StatusCode::NOT_FOUND, "Collaborator not found".to_string()));
     }
 
+    crate::access_changed(&state, &doc_id).await;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -186,6 +191,8 @@ pub async fn get_comments(
 ) -> Result<Json<Vec<Comment>>, (StatusCode, String)> {
     let _user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
+    let _ = crate::docs::get_document(State(state.clone()), Path(doc_id.clone()), jar.clone()).await?;
+
 
     let comments = sqlx::query_as::<_, Comment>(
         "SELECT c.id, c.document_id, c.user_id, c.content, c.resolved, c.created_at, u.username as author_name \
@@ -210,6 +217,11 @@ pub async fn add_comment(
 ) -> Result<Json<Comment>, (StatusCode, String)> {
     let user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
+    let Json(document) = crate::docs::get_document(State(state.clone()), Path(doc_id.clone()), jar.clone()).await?;
+    if !matches!(document.effective_role.as_deref(), Some("owner") | Some("editor")) {
+        return Err((StatusCode::FORBIDDEN, "Editor access required".to_string()));
+    }
+
 
     let comment_id = Uuid::new_v4().to_string();
 
@@ -298,6 +310,8 @@ pub async fn get_versions(
 ) -> Result<Json<Vec<crate::models::DocumentVersion>>, (StatusCode, String)> {
     let _user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
+    let _ = crate::docs::get_document(State(state.clone()), Path(doc_id.clone()), jar.clone()).await?;
+
 
     let versions = sqlx::query_as::<_, crate::models::DocumentVersion>(
         "SELECT v.id, v.document_id, v.user_id, v.content, v.created_at, u.username as author_name \

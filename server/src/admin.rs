@@ -136,5 +136,10 @@ pub async fn delete_user(
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    // Existing collaboration sockets must reauthenticate after account removal.
+    for sender in state.access_revisions.lock().await.values() {
+        sender.send_replace(());
+    }
+
     Ok(StatusCode::NO_CONTENT)
 }

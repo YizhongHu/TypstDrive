@@ -12,6 +12,7 @@ use tower_http::services::{ServeDir, ServeFile};
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod permissions;
 mod admin;
 mod api_keys;
 mod auth;
@@ -38,6 +39,7 @@ pub type RateLimiterMap = Arc<Mutex<HashMap<String, (u32, std::time::Instant)>>>
 #[derive(Clone)]
 pub struct AppState {
     pub compiler: Arc<Mutex<TypstCompiler>>,
+    pub access_revisions: Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<()>>>>,
     pub bcast_map: Arc<Mutex<HashMap<String, Arc<BroadcastGroup>>>>,
     pub db: AnyPool,
     pub key: Key,
@@ -88,6 +90,7 @@ async fn main() {
 
     let state = AppState {
         compiler: Arc::new(Mutex::new(TypstCompiler::new())),
+        access_revisions: Arc::new(Mutex::new(HashMap::new())),
         bcast_map: Arc::new(Mutex::new(HashMap::new())),
         db,
         key,
@@ -169,6 +172,7 @@ async fn main() {
         .nest("/v1", v1_routes.layer(TraceLayer::new_for_http()))
         .nest("/yjs", yjs_routes.layer(TraceLayer::new_for_http()))
         .fallback_service(ServeDir::new(&static_dir).fallback(ServeFile::new(format!("{}/index.html", static_dir))))
+        .layer(axum::middleware::from_fn_with_state(state.clone(), current_account))
         .with_state(state);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
@@ -180,3 +184,39 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+
+// Called after ACL changes. Clients reconnect and recheck their effective role.
+pub async fn access_changed(state: &AppState, key: &str) {
+    if let Some(sender) = state.access_revisions.lock().await.get(key) {
+        sender.send_replace(());
+    }
+}
+
+async fn current_account(
+    axum::extract::State(state): axum::extract::State<AppState>,
+    jar: axum_extra::extract::cookie::SignedCookieJar,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let path = request.uri().path();
+    if path.starts_with("/yjs/") || path.starts_with("/api/lsp/") {
+        if let Some(origin) = request.headers().get("origin") {
+            let host = request.headers().get("host").and_then(|h| h.to_str().ok()).unwrap_or("");
+            let origin = origin.to_str().unwrap_or("");
+            if origin != format!("https://{host}") && origin != format!("http://{host}") {
+                return (axum::http::StatusCode::FORBIDDEN, "Cross-origin websocket denied").into_response();
+            }
+        }
+    }
+    if (path.starts_with("/api/") || path.starts_with("/yjs/"))
+        && path != "/api/auth/login" && path != "/api/auth/logout"
+    {
+        if let Some(cookie) = jar.get("session_user_id") {
+            let valid = sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM users WHERE id = ?")
+                .bind(cookie.value()).fetch_one(&state.db).await.unwrap_or(0);
+            if valid != 1 { return (axum::http::StatusCode::UNAUTHORIZED, "Account no longer approved").into_response(); }
+        }
+    }
+    next.run(request).await
+}

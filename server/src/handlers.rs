@@ -13,6 +13,7 @@ use yrs::sync::Awareness;
 use yrs::{Doc, ReadTxn, Transact, Update};
 use yrs::updates::decoder::Decode;
 use futures_util::stream::{StreamExt, Stream};
+use futures_util::SinkExt;
 use crate::AppState;
 use crate::models::Document;
 
@@ -32,7 +33,7 @@ impl Stream for ViewerFilterStream {
             match futures_util::ready!(std::pin::Pin::new(&mut self.inner).poll_next(cx)) {
                 Some(Ok(msg)) => {
                     if let axum::extract::ws::Message::Binary(bytes) = msg {
-                        if self.is_viewer && !bytes.is_empty() && bytes[0] == 0 && bytes.len() > 1 && bytes[1] == 2 {
+                        if self.is_viewer && !crate::permissions::viewer_packet_allowed(&bytes) {
                             continue; // Skip updates
                         }
                         return std::task::Poll::Ready(Some(Ok(bytes.to_vec())));
@@ -97,60 +98,36 @@ pub async fn yjs_handler(
 ) -> impl IntoResponse {
     let user_id_opt = jar.get("session_user_id").map(|c| c.value().to_string());
 
-    let mut is_viewer = true;
-    let mut initial_content: Option<Vec<u8>> = None;
-    // (table, row_id) the autosave task persists into; None means no persistence.
-    let mut save_target: Option<(&'static str, String)> = None;
+    let access_key = if let Some(rest) = id.strip_prefix("space:") {
+        format!("space:{}", rest.split(':').next().unwrap_or_default())
+    } else { id.clone() };
+    let mut revision = {
+        let mut revisions = state.access_revisions.lock().await;
+        revisions.entry(access_key).or_insert_with(|| tokio::sync::watch::channel(()).0).subscribe()
+    };
 
-    if let Some(rest) = id.strip_prefix("space:") {
-        if let Some((space_id, file_id)) = rest.split_once(':') {
-            if let Some((_space, role)) = crate::spaces::space_role(&state, space_id, &user_id_opt).await {
-                is_viewer = role == "viewer";
-                if let Ok(Some((content,))) = sqlx::query_as::<_, (Option<Vec<u8>>,)>(
-                    "SELECT content FROM space_files WHERE id = ? AND space_id = ?"
-                )
-                .bind(file_id)
-                .bind(space_id)
-                .fetch_optional(&state.db)
-                .await
-                {
-                    initial_content = content;
-                }
-                save_target = Some(("space_files", file_id.to_string()));
-            }
-        }
+    let (is_viewer, initial_content, save_target) = if let Some(rest) = id.strip_prefix("space:") {
+        let Some((space_id, file_id)) = rest.split_once(':') else {
+            return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+        };
+        let Some((_, role)) = crate::spaces::space_role(&state, space_id, &user_id_opt).await else {
+            return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+        };
+        let content = match sqlx::query_as::<_, (Option<Vec<u8>>,)>(
+            "SELECT content FROM space_files WHERE id = ? AND space_id = ?"
+        ).bind(file_id).bind(space_id).fetch_optional(&state.db).await {
+            Ok(Some((content,))) => content,
+            _ => return (StatusCode::FORBIDDEN, "Forbidden").into_response(),
+        };
+        (role == "viewer", content, Some(("space_files", file_id.to_string())))
     } else {
-        let doc_info = sqlx::query_as::<_, Document>(
-            "SELECT id, owner_id, folder_id, title, content, thumbnail_svg, public_role, created_at, updated_at FROM documents WHERE id = ?"
-        )
-        .bind(&id)
-        .fetch_optional(&state.db)
-        .await;
-
-        if let Ok(Some(ref d)) = doc_info {
-            if let Some(uid) = &user_id_opt {
-                if &d.owner_id == uid {
-                    is_viewer = false;
-                } else if let Ok(Some(_)) = sqlx::query_as::<_, (String,)>("SELECT role FROM collaborators WHERE document_id = ? AND user_id = ? AND role = 'editor'")
-                    .bind(&id)
-                    .bind(uid)
-                    .fetch_optional(&state.db)
-                    .await
-                {
-                    is_viewer = false;
-                }
-            }
-            if is_viewer {
-                if let Some(pr) = &d.public_role {
-                    if pr == "editor" {
-                        is_viewer = false;
-                    }
-                }
-            }
-            initial_content = d.content.clone();
-        }
-        save_target = Some(("documents", id.clone()));
-    }
+        let doc = match crate::docs::get_document(State(state.clone()), Path(id.clone()), jar.clone()).await {
+            Ok(Json(doc)) => doc,
+            Err(_) => return (StatusCode::FORBIDDEN, "Forbidden").into_response(),
+        };
+        let is_viewer = doc.effective_role.as_deref() == Some("viewer");
+        (is_viewer, doc.content, Some(("documents", id.clone())))
+    };
 
     let mut bcast_map = state.bcast_map.lock().await;
     let bcast = if let Some(bcast) = bcast_map.get(&id) {
@@ -196,6 +173,10 @@ pub async fn yjs_handler(
 
     drop(bcast_map);
 
+    if revision.has_changed().unwrap_or(true) {
+        return (StatusCode::FORBIDDEN, "Access changed; reconnect").into_response();
+    }
+
     ws.on_upgrade(move |socket| async move {
         let (sink, stream) = socket.split();
         let sink = Arc::new(Mutex::new(AxumSink(sink)));
@@ -205,12 +186,36 @@ pub async fn yjs_handler(
             is_viewer,
         };
 
-        let sub = bcast.subscribe(sink, filtered_stream);
-        match sub.completed().await {
-            Ok(_) => println!("broadcasting for channel finished successfully"),
-            Err(e) => eprintln!("broadcasting for channel finished abruptly: {}", e),
+        let sub = bcast.subscribe(sink.clone(), filtered_stream);
+        tokio::select! {
+            result = sub.completed() => {
+                if let Err(error) = result { tracing::debug!("Collaboration connection ended: {error}"); }
+            }
+            _ = revision.changed() => {}
         }
-    })
+        let _ = sink.lock().await.close().await;
+
+    }).into_response()
+}
+
+async fn shared_input(
+    state: &AppState, jar: &axum_extra::extract::cookie::SignedCookieJar,
+    mut payload: CompileRequest,
+) -> Result<CompileRequest, StatusCode> {
+    if let Some(id) = payload.document_id.clone() {
+        let Json(doc) = crate::docs::get_document(State(state.clone()), Path(id), jar.clone())
+            .await.map_err(|_| StatusCode::FORBIDDEN)?;
+        if doc.effective_role.as_deref() == Some("viewer") {
+            payload.text = Some(crate::spaces::decode_text_blob(&doc.content.unwrap_or_default()));
+        }
+    } else if let Some(id) = payload.space_id.clone() {
+        let (_, role) = crate::spaces::space_role(state, &id, &jar.get("session_user_id").map(|c| c.value().to_string()))
+            .await.ok_or(StatusCode::FORBIDDEN)?;
+        if role == "viewer" { payload.files = None; }
+    } else if jar.get("session_user_id").is_none() {
+        return Err(StatusCode::UNAUTHORIZED);
+    }
+    Ok(payload)
 }
 
 pub async fn compile_handler(
@@ -218,6 +223,12 @@ pub async fn compile_handler(
     jar: axum_extra::extract::cookie::SignedCookieJar,
     Json(payload): Json<CompileRequest>,
 ) -> impl IntoResponse {
+    let payload = match shared_input(&state, &jar, payload).await {
+        Ok(payload) => payload,
+        Err(_) => return Json(CompileResponse { svgs: None, errors: Some(vec![Diagnostic {
+            message: "Unauthorized".into(), severity: "Error".into(), from: None, to: None,
+        }]), stats: None }),
+    };
     let mut files_map = std::collections::HashMap::new();
     let mut can_save_thumbnail = false;
     let user_id_opt = jar.get("session_user_id").map(|c| c.value().to_string());
@@ -239,7 +250,7 @@ pub async fn compile_handler(
             }
         };
 
-        let overrides = payload.files.clone().unwrap_or_default();
+        let overrides = if role == "viewer" { std::collections::HashMap::new() } else { payload.files.clone().unwrap_or_default() };
         let input = crate::spaces::assemble_project(&state, &space, overrides).await;
         let can_save = role == "owner" || role == "editor";
 
@@ -372,6 +383,11 @@ pub async fn export_handler(
     Path(format): Path<String>,
     Json(payload): Json<CompileRequest>,
 ) -> impl IntoResponse {
+    let payload = match shared_input(&state, &jar, payload).await {
+        Ok(payload) => payload,
+        Err(status) => return (status, "Forbidden").into_response(),
+    };
+
     let mut files_map = std::collections::HashMap::new();
     let user_id_opt = jar.get("session_user_id").map(|c| c.value().to_string());
 
@@ -487,9 +503,16 @@ use std::process::Stdio;
 use tokio::process::Command;
 
 pub async fn pandoc_export_handler(
+    State(state): State<AppState>,
+    jar: axum_extra::extract::cookie::SignedCookieJar,
     Path(format): Path<String>,
     Json(payload): Json<CompileRequest>,
 ) -> impl IntoResponse {
+    let payload = match shared_input(&state, &jar, payload).await {
+        Ok(payload) => payload,
+        Err(status) => return (status, "Forbidden").into_response(),
+    };
+
     let supported_formats = ["docx", "latex", "markdown", "html"];
     if !supported_formats.contains(&format.as_str()) {
         return (StatusCode::BAD_REQUEST, "Unsupported format").into_response();
@@ -548,8 +571,12 @@ pub async fn pandoc_export_handler(
 }
 
 pub async fn pandoc_import_handler(
+    jar: axum_extra::extract::cookie::SignedCookieJar,
     mut multipart: Multipart,
 ) -> impl IntoResponse {
+    if jar.get("session_user_id").is_none() {
+        return (StatusCode::UNAUTHORIZED, "Authentication required").into_response();
+    }
     let mut file_data = Vec::new();
     let mut file_ext = String::new();
 
@@ -655,6 +682,14 @@ pub async fn lsp_handler(
 
     if !has_access {
         return (StatusCode::FORBIDDEN, "Forbidden").into_response();
+    }
+
+    let document = match crate::docs::get_document(State(state.clone()), Path(id.clone()), jar.clone()).await {
+        Ok(Json(doc)) => doc,
+        Err(_) => return (StatusCode::FORBIDDEN, "Forbidden").into_response(),
+    };
+    if !matches!(document.effective_role.as_deref(), Some("owner") | Some("editor")) {
+        return (StatusCode::FORBIDDEN, "Editor access required").into_response();
     }
 
     let mut files_map = std::collections::HashMap::new();

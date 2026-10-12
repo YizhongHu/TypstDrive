@@ -98,7 +98,7 @@ pub async fn space_role(
 
     if let Some(pr) = space.public_role.clone() {
         if pr == "viewer" || pr == "editor" {
-            return Some((space, pr));
+            return Some((space, "viewer".to_string()));
         }
     }
 
@@ -319,6 +319,9 @@ pub async fn update_space(
         space.public_role = if public_role == "none" || public_role.is_empty() {
             None
         } else {
+            if public_role != "viewer" {
+                return Err((StatusCode::BAD_REQUEST, "Public sharing can only grant viewer access".to_string()));
+            }
             Some(public_role)
         };
     }
@@ -336,6 +339,7 @@ pub async fn update_space(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    crate::access_changed(&state, &format!("space:{id}")).await;
     Ok(Json(space))
 }
 

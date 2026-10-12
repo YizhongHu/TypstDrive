@@ -2,14 +2,15 @@
     import { onMount } from 'svelte';
     import { page } from '$app/stores';
     import Icon from '@iconify/svelte';
-    
+
     let { onClose, docId = undefined } = $props<{ onClose: () => void, docId?: string }>();
 
     type CollaboratorView = { id: string; user_id: string; username: string; email: string; role: string; created_at: string };
 
     let link = $state('');
     let copied = $state(false);
-    let role = $state('editor');
+    let role = $state('viewer');
+    let shareError = $state('');
 
     let collaborators = $state<CollaboratorView[]>([]);
     let collabLoading = $state(false);
@@ -19,7 +20,7 @@
     let inviteRole = $state('editor');
     let inviteStatus = $state<'idle' | 'loading' | 'success' | 'error'>('idle');
     let inviteMessage = $state('');
-    
+
     async function loadCollaborators() {
         if (!docId) return;
         collabLoading = true;
@@ -73,18 +74,29 @@
     onMount(() => {
         const baseUrl = window.location.origin;
         const docUrl = docId ? `${baseUrl}/doc/${docId}` : window.location.href;
-        link = `${docUrl}?role=${role}`;
+        link = docUrl;
         loadCollaborators();
+        if (docId) fetch(`/api/docs/${docId}`).then(res => res.ok ? res.json() : null).then(doc => {
+            if (doc) role = doc.public_role ? 'viewer' : 'none';
+        });
     });
-    
+
     $effect(() => {
         const baseUrl = window.location.origin;
-        
+
         let docUrl = docId ? `${baseUrl}/doc/${docId}` : window.location.href.split('?')[0];
-        link = `${docUrl}?role=${role}`;
+        link = docUrl;
     });
-    
-    function copyLink() {
+
+    async function copyLink() {
+        shareError = '';
+        if (!docId) { shareError = 'Open a document to share it.'; return; }
+        const response = await fetch(`/api/docs/${docId}`, {
+            method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ public_role: role })
+        }).catch(() => null);
+        if (!response?.ok) { shareError = 'Could not save sharing. Only the owner can change sharing.'; return; }
+
         if (navigator.clipboard && window.isSecureContext) {
             navigator.clipboard.writeText(link).catch(console.error);
         } else {
@@ -111,16 +123,17 @@
                 <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
             </button>
         </div>
-        
+
         <div class="p-6 space-y-6">
+            {#if shareError}<p role="alert" class="text-red-500">{shareError}</p>{/if}
             <div class="space-y-3">
                 <div class="text-sm font-semibold text-[var(--theme-text)]" style="color: var(--theme-text);">Invite Collaborator</div>
                 <form onsubmit={inviteUser} class="flex items-center gap-2 bg-gray-50 dark:bg-zinc-900/50 p-1.5 rounded-lg border border-gray-300 dark:border-zinc-700 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all">
                     <div class="pl-2 text-gray-400">
                         <Icon icon="mdi:account-plus-outline" class="text-xl" />
                     </div>
-                    <input 
-                        type="email" 
+                    <input
+                        type="email"
                         placeholder="Add people via email..."
                         bind:value={inviteEmail}
                         required
@@ -131,7 +144,7 @@
                         <option class="bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100" value="editor">Editor</option>
                         <option class="bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100" value="viewer">Viewer</option>
                     </select>
-                    <button 
+                    <button
                         type="submit"
                         disabled={inviteStatus === 'loading'}
                         class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-md text-sm font-medium transition-colors shadow-sm disabled:opacity-70 min-w-[80px]"
@@ -195,18 +208,19 @@
                     </div>
                     <div class="flex-1">
                         <h4 class="text-sm font-medium text-gray-900 dark:text-white">Anyone with the link</h4>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Can view and collaborate based on role</p>
+                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Read-only; editing requires an approved account and document access</p>
                     </div>
                     <select bind:value={role} class="bg-gray-100 dark:bg-zinc-800 border border-gray-200 dark:border-zinc-700 text-sm font-medium text-gray-700 dark:text-gray-300 rounded-md px-3 py-1.5 focus:outline-none cursor-pointer focus:ring-2 focus:ring-blue-500/20 hover:bg-gray-200 dark:hover:bg-zinc-700 transition-colors">
+                        <option class="bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100" value="none">Restricted</option>
                         <option class="bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100" value="viewer">Viewer</option>
-                        <option class="bg-white dark:bg-zinc-800 text-gray-900 dark:text-gray-100" value="editor">Editor</option>
+
                     </select>
                 </div>
             </div>
         </div>
-        
+
         <div class="p-4 bg-gray-50 dark:bg-zinc-950/50 border-t border-[var(--theme-border)] flex items-center justify-between" style="border-color: var(--theme-border);">
-            <button 
+            <button
                 onclick={copyLink}
                 class="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium text-blue-600 hover:bg-blue-50 dark:text-blue-400 dark:hover:bg-blue-500/10 transition-colors"
             >
@@ -215,7 +229,7 @@
                     <span>Link copied!</span>
                 {:else}
                     <Icon icon="mdi:link-variant" class="text-lg" />
-                    <span>Copy link</span>
+                    <span>Save sharing &amp; copy link</span>
                 {/if}
             </button>
 

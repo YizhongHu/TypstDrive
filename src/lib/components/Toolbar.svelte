@@ -608,6 +608,7 @@
 
 	
 	<div class="flex items-center px-4 py-1.5 bg-white/50 dark:bg-black/10 border-t border-gray-200/60 dark:border-white/10 gap-4 overflow-x-auto no-scrollbar">
+		{#if !isViewer}
 		
 		
 		<div class="flex items-center gap-1">
@@ -682,6 +683,9 @@
 
 		<div class="w-px h-4 bg-gray-300 dark:bg-white/10"></div>
 
+		{:else}
+		<span class="text-xs font-medium opacity-70">Read-only</span>
+		{/if}
 		<div class="flex items-center gap-1 bg-white dark:bg-black/20 border border-gray-300 dark:border-white/20 rounded shadow-sm overflow-hidden">
 			<button 
 				onclick={() => $documentZoomStore = Math.max(10, $documentZoomStore - 10)} 

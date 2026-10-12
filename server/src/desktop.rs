@@ -62,7 +62,7 @@ pub async fn authenticate(
     ))?;
 
     let row = sqlx::query_as::<_, (String, String)>(
-        "SELECT id, user_id FROM device_tokens WHERE token_hash = ?",
+        "SELECT t.id, t.user_id FROM device_tokens t INNER JOIN users u ON u.id = t.user_id WHERE t.token_hash = ?",
     )
     .bind(hash_token(&token))
     .fetch_optional(&state.db)
@@ -880,7 +880,7 @@ async fn document_role(
     if role == "none" {
         if let Some(public) = public_role {
             if public == "viewer" || public == "editor" {
-                role = public;
+                role = "viewer".to_string();
             }
         }
     }

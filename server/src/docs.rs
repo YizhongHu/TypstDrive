@@ -140,7 +140,7 @@ pub async fn get_document(
     if effective_role == "none" {
         if let Some(pr) = &doc.public_role {
             if pr == "viewer" || pr == "editor" {
-                effective_role = pr.clone();
+                effective_role = "viewer".to_string();
             }
         }
     }
@@ -186,6 +186,9 @@ pub async fn update_document(
         if new_public_role == "none" || new_public_role.is_empty() {
             doc.public_role = None;
         } else {
+            if new_public_role != "viewer" {
+                return Err((StatusCode::BAD_REQUEST, "Public sharing can only grant viewer access".to_string()));
+            }
             doc.public_role = Some(new_public_role);
         }
     }
@@ -202,6 +205,7 @@ pub async fn update_document(
     .await
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
+    crate::access_changed(&state, &id).await;
     Ok(Json(doc))
 }
 

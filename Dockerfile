@@ -3,8 +3,8 @@
 # build host (no emulation) regardless of the target platform.
 FROM --platform=$BUILDPLATFORM oven/bun:alpine AS frontend-builder
 WORKDIR /app
-COPY package.json ./
-RUN bun install
+COPY package.json bun.lock ./
+RUN bun install --frozen-lockfile
 COPY . .
 RUN bun run build
 
@@ -18,7 +18,7 @@ RUN git clone https://github.com/typst/typst.git typst \
 COPY server/Cargo.* server/
 COPY server/src server/src
 WORKDIR /app/server
-RUN cargo build --release
+RUN cargo build --locked --release
 
 # Final Runtime Image
 FROM alpine:3.19

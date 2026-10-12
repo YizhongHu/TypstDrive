@@ -14,9 +14,11 @@
 	let svgs = $state<string[]>([]);
 	let errors = $state<Diagnostic[]>([]);
 	let timeoutId: number | undefined;
+	let viewerRefresh: number | undefined;
 	let initialized = $state(false);
 	let documentTitle = $state('Untitled Document');
-	let isViewer = $state(false);
+	let isViewer = $state(true);
+	let accessError = $state('');
 
 	let contextMenu = $state({ show: false, x: 0, y: 0, text: '' });
 
@@ -86,30 +88,28 @@
 		if (!docId) return;
 
 		
-		fetch(`/api/docs/${docId}`)
-			.then(res => res.json())
-			.then(doc => {
-				if (doc && doc.title) {
-					documentTitle = doc.title;
-				}
-				if (doc && doc.effective_role === 'viewer') {
-					isViewer = true;
-				}
-			})
-			.catch(err => console.error("Failed to fetch document:", err));
-
-		initYjs(docId);
-		initialized = true;
-
-		text?.observe(() => {
-			if (timeoutId) clearTimeout(timeoutId);
-			timeoutId = window.setTimeout(triggerCompile, 500);
-		});
-
-		triggerCompile();
+        fetch(`/api/docs/${docId}`)
+            .then(async res => {
+                if (!res.ok) throw new Error('This document is private or unavailable. Sign in with an approved account.');
+                return res.json();
+            })
+            .then(doc => {
+                documentTitle = doc.title;
+                isViewer = doc.effective_role === 'viewer';
+                initYjs(docId);
+                initialized = true;
+                text?.observe(() => {
+                    if (timeoutId) clearTimeout(timeoutId);
+                    timeoutId = window.setTimeout(triggerCompile, 500);
+                });
+                triggerCompile();
+                if (isViewer) viewerRefresh = window.setInterval(triggerCompile, 6000);
+            })
+            .catch(err => { accessError = err.message; });
 
 		return () => {
 			if (timeoutId) clearTimeout(timeoutId);
+            if (viewerRefresh) clearInterval(viewerRefresh);
 			cleanupYjs();
 		};
 	});
@@ -124,6 +124,7 @@
 <svelte:window onclick={closeContextMenu} />
 
 <div class="flex flex-col h-screen relative">
+	{#if accessError}<p role="alert" class="p-4">{accessError} <a href="/login">Sign in</a></p>{/if}
 	<Toolbar title={documentTitle} docId={$page.params.id} isViewer={isViewer} />
 
 	<main class="flex-1 flex flex-col md:flex-row overflow-hidden relative" oncontextmenu={handleContextMenu}>

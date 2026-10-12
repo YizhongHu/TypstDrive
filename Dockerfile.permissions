@@ -1,0 +1,15 @@
+FROM typstdrive-permissions-build AS backend
+COPY server/src /app/server/src
+WORKDIR /app/server
+RUN cargo build --locked --release && rustc --edition=2021 --test src/permissions.rs -o /tmp/permission-tests && /tmp/permission-tests
+
+FROM typstdrive-permissions-frontend AS frontend
+COPY src /app/src
+WORKDIR /app
+RUN bun run build
+
+FROM ghcr.io/sirblobby/typstdrive@sha256:9ea2a2e9b7c4b6943354b6a1a8ed6c83e70ef14048195f46e45758df30429a87
+COPY --from=backend /app/server/target/release/server /app/server
+COPY --from=frontend /app/build /app/build
+LABEL org.opencontainers.image.title="TypstDrive production permissions" \
+      org.opencontainers.image.revision="5d3681bd3f3016275ef829445b75c239761495ea+permissions"

@@ -100,7 +100,7 @@ pub async fn render_handler(
     let key_hash = hash_key(&api_key);
 
     let key_row = sqlx::query_as::<_, (String, String, i64)>(
-        "SELECT id, user_id, rate_limit FROM api_keys WHERE key_hash = ?"
+        "SELECT k.id, k.user_id, k.rate_limit FROM api_keys k INNER JOIN users u ON u.id = k.user_id WHERE k.key_hash = ?"
     )
     .bind(&key_hash)
     .fetch_optional(&state.db)
