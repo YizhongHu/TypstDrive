@@ -6,6 +6,73 @@ use tokio::sync::RwLock;
 use yrs::sync::Awareness;
 use yrs_axum::broadcast::BroadcastGroup;
 
+#[test]
+fn first_push_preserves_remote_assets_not_yet_pulled() {
+    let mut previous = Files::new();
+    previous.insert("notes/main.typ".into(), b"old".to_vec());
+    previous.insert("notes/images/remote.png".into(), vec![0, 255]);
+    previous.insert(
+        "notes/references.bib".into(),
+        b"tracked bibliography".to_vec(),
+    );
+    let mut local = Files::new();
+    local.insert("notes/main.typ".into(), b"new".to_vec());
+    let baseline = hashes(&BTreeMap::from([(
+        "notes/references.bib".into(),
+        b"tracked bibliography".to_vec(),
+    )]));
+    retain_tracked_previous(&mut previous, &local, &baseline);
+    assert!(previous.contains_key("notes/main.typ"));
+    assert!(previous.contains_key("notes/references.bib"));
+    assert!(!previous.contains_key("notes/images/remote.png"));
+}
+
+#[tokio::test]
+async fn pull_cannot_change_a_live_text_file_to_binary_and_corrupt_autosave() {
+    let state = state(None).await;
+    sqlx::query("INSERT INTO spaces (id,owner_id,name,entrypoint) VALUES ('project','owner','Synthetic','main.typ')").execute(&state.db).await.unwrap();
+    sqlx::query("INSERT INTO space_files (id,space_id,path,kind,content,mime_type) VALUES ('file','project','notes.txt','text',?,'text/plain')").bind(crate::spaces::encode_text_blob("local text")).execute(&state.db).await.unwrap();
+    let mut target = target();
+    target.source.clear();
+    target.dependencies.clear();
+    let current = local(&state, "project", "project", &target).await.unwrap();
+    let doc = Doc::new();
+    doc.get_or_insert_text("typst")
+        .insert(&mut doc.transact_mut(), 0, "local text");
+    let group = Arc::new(BroadcastGroup::new(Arc::new(RwLock::new(Awareness::new(doc))), 10).await);
+    state
+        .bcast_map
+        .lock()
+        .await
+        .insert("space:project:file".into(), group);
+    let mut remote = Files::new();
+    remote.insert("notes.txt".into(), vec![0, 255, 0]);
+    assert_eq!(
+        apply_pull(
+            &state,
+            "project",
+            "project",
+            &target,
+            &current,
+            &remote,
+            &fingerprint(&current.files)
+        )
+        .await
+        .unwrap_err()
+        .0,
+        StatusCode::BAD_REQUEST
+    );
+    assert_eq!(
+        local(&state, "project", "project", &target)
+            .await
+            .unwrap()
+            .files,
+        current.files
+    );
+    assert!(text_file("LICENSE", b"Copyright example"));
+    assert!(!text_file("font.ttf", b"synthetic font"));
+}
+
 async fn state(base: Option<String>) -> AppState {
     let db = crate::db::test_db().await;
     init_schema(&db).await;
@@ -69,6 +136,8 @@ async fn live_document(state: &AppState, id: &str) {
 }
 #[tokio::test]
 async fn pull_preserves_binary_assets_bib_and_live_collaboration() {
+    use axum::response::IntoResponse;
+    use base64::Engine;
     let state = state(None).await;
     let id = document(&state).await;
     live_document(&state, &id).await;
@@ -77,15 +146,16 @@ async fn pull_preserves_binary_assets_bib_and_live_collaboration() {
     let mut remote = Files::new();
     remote.insert(
         "notes/main.typ".into(),
-        b"#image(\"images/plot.png\")\n#bibliography(\"references.bib\")".to_vec(),
+        b"#image(\"images/plot.png\", width: 1cm)\n\nReference @example.\n\n#bibliography(\"references.bib\")".to_vec(),
     );
     remote.insert(
         "notes/images/plot.png".into(),
-        vec![0, 255, 137, 80, 78, 71],
+        base64::engine::general_purpose::STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==").unwrap(),
     );
     remote.insert(
         "notes/references.bib".into(),
-        b"@article{example,title={Test}}".to_vec(),
+        b"@article{example,title={Example},author={Doe, Jane},year={2026},journal={Testing}}"
+            .to_vec(),
     );
     apply_pull(
         &state,
@@ -111,6 +181,24 @@ async fn pull_preserves_binary_assets_bib_and_live_collaboration() {
         crate::spaces::decode_text_blob(&saved).as_bytes(),
         remote["notes/main.typ"]
     );
+    let response = crate::handlers::compile_handler(
+        State(state.clone()),
+        jar(&state, "owner"),
+        Json(crate::handlers::CompileRequest {
+            text: Some(String::from_utf8(remote["notes/main.typ"].clone()).unwrap()),
+            document_id: Some(id),
+            space_id: None,
+            files: None,
+        }),
+    )
+    .await
+    .into_response();
+    let body = axum::body::to_bytes(response.into_body(), 2 * 1024 * 1024)
+        .await
+        .unwrap();
+    let compiled: Value = serde_json::from_slice(&body).unwrap();
+    assert!(compiled["errors"].is_null(), "{}", compiled["errors"]);
+    assert_eq!(compiled["svgs"].as_array().unwrap().len(), 1);
 }
 #[tokio::test]
 async fn a_collaborative_edit_after_preview_blocks_pull() {

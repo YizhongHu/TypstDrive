@@ -50,6 +50,14 @@ fn fingerprint(files: &Files) -> String {
         Sha256::digest(serde_json::to_vec(&hashes(files)).unwrap())
     )
 }
+fn retain_tracked_previous(
+    previous: &mut Files,
+    local: &Files,
+    baseline: &BTreeMap<String, String>,
+) {
+    // A first push must not delete selected remote assets never pulled locally.
+    previous.retain(|path, _| local.contains_key(path) || baseline.contains_key(path));
+}
 
 pub async fn init_schema(db: &sqlx::AnyPool) {
     for statement in [
@@ -231,10 +239,13 @@ pub async fn connect(
     {
         return Err(bad("The project entrypoint does not exist on GitHub"));
     }
+    let current = local(&state, &kind, &id, &target).await?;
+    let mut baseline = hashes(&remote.files);
+    baseline.retain(|path, _| current.files.contains_key(path));
     let link = Link {
         target,
         head: remote.head,
-        base_hashes: hashes(&remote.files),
+        base_hashes: baseline,
     };
     save_link(&state, &kind, &id, &link).await?;
     Ok(Json(
@@ -326,6 +337,8 @@ pub async fn sync(
             let target = link.target.clone();
             let expected = remote.head.clone();
             let files = current.files.clone();
+            let mut previous = remote.files;
+            retain_tracked_previous(&mut previous, &current.files, &link.base_hashes);
             let message = payload
                 .message
                 .unwrap_or_else(|| "Update Typst files from TypstDrive".into());
@@ -336,7 +349,7 @@ pub async fn sync(
                 client.push(
                     &target,
                     &expected,
-                    &remote.files,
+                    &previous,
                     &remote.modes,
                     &files,
                     &message,
@@ -381,12 +394,16 @@ pub async fn sync(
     ))
 }
 
-fn text_path(path: &str) -> bool {
-    [
-        "typ", "toml", "bib", "csl", "yml", "yaml", "json", "md", "txt", "csv", "rs", "py", "js",
-        "ts", "html", "css", "xml", "svg", "tex",
-    ]
-    .contains(&path.rsplit('.').next().unwrap_or(""))
+fn text_file(path: &str, bytes: &[u8]) -> bool {
+    let extension = path.rsplit('.').next().unwrap_or("").to_ascii_lowercase();
+    let binary = [
+        "png", "jpg", "jpeg", "gif", "webp", "bmp", "ico", "avif", "tif", "tiff", "pdf", "ttf",
+        "otf", "woff", "woff2", "eot", "zip", "tar", "gz", "bz2", "xz", "7z", "rar", "bin", "wasm",
+        "exe", "dll",
+    ];
+    !binary.contains(&extension.as_str())
+        && !bytes.contains(&0)
+        && std::str::from_utf8(bytes).is_ok()
 }
 fn mime(path: &str) -> &'static str {
     match path.rsplit('.').next().unwrap_or("") {
@@ -547,7 +564,10 @@ async fn apply_pull(
                 .map(|r| r.0.clone())
                 .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
             let key = format!("space:{id}:{fid}");
-            let is_text = text_path(path) && std::str::from_utf8(bytes).is_ok();
+            let is_text = text_file(path, bytes);
+            if previous.map(|row| row.2.as_str()) == Some("text") && !is_text {
+                return Err(bad("A local text file became binary on GitHub. Remove or rename the local file before pulling; no changes were applied"));
+            }
             let encoded = if is_text {
                 let old = if let Some(a) = guards.get(&key) {
                     a.doc()
@@ -643,7 +663,7 @@ pub async fn import(
         .await
         .map_err(db_error)?;
     for (path, bytes) in &remote.files {
-        let is_text = text_path(path) && std::str::from_utf8(bytes).is_ok();
+        let is_text = text_file(path, bytes);
         let data = if is_text {
             crate::spaces::encode_text_blob(std::str::from_utf8(bytes).unwrap())
         } else {

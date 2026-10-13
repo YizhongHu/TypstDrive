@@ -21,7 +21,9 @@ fonts/
 Relative paths are preserved. Binary images and fonts stay binary. Bibliography
 files are included like other dependencies. Files outside the selected source
 and dependency paths are never changed. Dependencies outside the source file's
-folder require a repository-backed project rather than `../` paths.
+folder require a repository-backed project rather than `../` paths. A first push
+preserves selected remote assets that have never been pulled into the local
+document or project. Deletions apply only to previously tracked local files.
 
 ## Projects
 
@@ -49,7 +51,8 @@ attribution and preserve existing executable file modes.
 
 Sync is limited to 1,000 files, 10 MiB per file, 100 MiB total, and an approximately
 two-minute API-operation budget. Truncated GitHub trees, symlinks and submodules
-are rejected. Sync does not run Git hooks or repository scripts.
+are rejected. Git LFS assets are not resolved in this version. Sync does not
+run Git hooks or repository scripts.
 
 ## Administrator setup
 
