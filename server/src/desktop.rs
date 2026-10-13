@@ -330,7 +330,9 @@ pub async fn delete_space(
     headers: HeaderMap,
     Path(space_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = authenticate(&state, &headers).await?;
+    owned_space(&state, &space_id, &user_id).await?;
 
     let _ = sqlx::query("DELETE FROM space_files WHERE space_id = ?")
         .bind(&space_id)
@@ -533,6 +535,7 @@ pub async fn push_file(
     Path(space_id): Path<String>,
     Json(payload): Json<PushFileRequest>,
 ) -> Result<PushOutcome, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = authenticate(&state, &headers).await?;
     owned_space(&state, &space_id, &user_id).await?;
 
@@ -635,6 +638,7 @@ pub async fn delete_file(
     Path(space_id): Path<String>,
     Query(query): Query<PathQuery>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = authenticate(&state, &headers).await?;
     owned_space(&state, &space_id, &user_id).await?;
 
@@ -931,6 +935,7 @@ pub async fn push_document(
     Path(id): Path<String>,
     Json(payload): Json<PushDocumentRequest>,
 ) -> Result<PushOutcome, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = authenticate(&state, &headers).await?;
     let (role, _, current) = document_role(&state, &id, &user_id).await?;
 

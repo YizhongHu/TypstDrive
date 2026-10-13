@@ -159,6 +159,7 @@ pub async fn update_document(
     jar: SignedCookieJar,
     Json(payload): Json<crate::models::UpdateDocumentRequest>,
 ) -> Result<Json<Document>, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
 
@@ -214,6 +215,7 @@ pub async fn delete_document(
     Path(id): Path<String>,
     jar: SignedCookieJar,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
 
@@ -237,6 +239,7 @@ pub async fn upload_file(
     jar: SignedCookieJar,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
 

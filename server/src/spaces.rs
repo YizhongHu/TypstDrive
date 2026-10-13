@@ -293,6 +293,7 @@ pub async fn update_space(
     jar: SignedCookieJar,
     Json(payload): Json<UpdateSpaceRequest>,
 ) -> Result<Json<Space>, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
 
@@ -348,8 +349,14 @@ pub async fn delete_space(
     Path(id): Path<String>,
     jar: SignedCookieJar,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
+
+    let owned = sqlx::query_scalar::<_, String>("SELECT id FROM spaces WHERE id = ? AND owner_id = ?")
+        .bind(&id).bind(&user_id).fetch_optional(&state.db).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    if owned.is_none() { return Err((StatusCode::NOT_FOUND, "Space not found or unauthorized".into())); }
 
     let _ = sqlx::query("DELETE FROM space_files WHERE space_id = ?")
         .bind(&id)
@@ -397,6 +404,7 @@ pub async fn create_space_file(
     jar: SignedCookieJar,
     Json(payload): Json<CreateSpaceFileRequest>,
 ) -> Result<Json<SpaceFile>, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id_opt = jar.get("session_user_id").map(|c| c.value().to_string());
     let (_, role) = space_role(&state, &id, &user_id_opt)
         .await
@@ -430,6 +438,7 @@ pub async fn upload_space_file(
     jar: SignedCookieJar,
     mut multipart: Multipart,
 ) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id_opt = jar.get("session_user_id").map(|c| c.value().to_string());
     let (_, role) = space_role(&state, &id, &user_id_opt)
         .await
@@ -508,6 +517,7 @@ pub async fn update_space_file(
     jar: SignedCookieJar,
     Json(payload): Json<UpdateSpaceFileRequest>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id_opt = jar.get("session_user_id").map(|c| c.value().to_string());
     let (_, role) = space_role(&state, &id, &user_id_opt)
         .await
@@ -536,6 +546,7 @@ pub async fn delete_space_file(
     Path((id, file_id)): Path<(String, String)>,
     jar: SignedCookieJar,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id_opt = jar.get("session_user_id").map(|c| c.value().to_string());
     let (_, role) = space_role(&state, &id, &user_id_opt)
         .await

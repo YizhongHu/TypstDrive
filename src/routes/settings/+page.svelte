@@ -5,6 +5,7 @@
     import Icon from '@iconify/svelte';
     import ThemePicker from '$lib/components/ThemePicker.svelte';
     import Footer from '$lib/components/Footer.svelte';
+    import GitHubAccountPanel from '$lib/components/GitHubAccountPanel.svelte';
     import { Chart, LineController, LineElement, PointElement, CategoryScale, LinearScale, Filler, Tooltip } from 'chart.js';
     Chart.register(LineController, LineElement, PointElement, CategoryScale, LinearScale, Filler, Tooltip);
 
@@ -91,6 +92,7 @@
     }
 
     onMount(async () => {
+        if(new URLSearchParams(window.location.search).has("github")) activeSection="github";
         if (!$userStore) { goto('/login'); return; }
         username = $userStore.username;
         email = $userStore.email || '';
@@ -405,6 +407,7 @@
 
     const navItems = $derived([
         { id: 'account', label: 'Account', icon: 'mdi:account-outline' },
+        { id: 'github', label: 'GitHub', icon: 'mdi:github' },
         { id: 'theme', label: 'Theme', icon: 'mdi:palette-outline' },
         { id: 'storage', label: 'Storage', icon: 'mdi:harddisk' },
         { id: 'api-keys', label: 'API Keys', icon: 'mdi:key-outline' },
@@ -458,6 +461,7 @@
 
         <main class="flex-1 min-w-0 space-y-6 pb-16">
 
+            {#if activeSection === 'github'}<GitHubAccountPanel />{/if}
             {#if activeSection === 'account'}
                 <div class="bg-white dark:bg-black/20 rounded-xl shadow-sm border border-gray-200 dark:border-white/10 overflow-hidden">
                     <div class="p-6 sm:p-8">

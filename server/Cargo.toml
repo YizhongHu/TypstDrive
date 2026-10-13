@@ -37,4 +37,5 @@ tempfile = "3.27.0"
 sha2 = "0.10"
 base64 = "0.22"
 toml = "0.8"
+cookie = { version = "0.18", features = ["private"] }
 ureq = "2.12"
