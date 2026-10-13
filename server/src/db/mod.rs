@@ -1,6 +1,15 @@
 mod postgres;
 mod sqlite;
 
+#[cfg(test)]
+pub async fn test_db() -> sqlx::AnyPool {
+    sqlx::any::install_default_drivers();
+    let pool = sqlx::any::AnyPoolOptions::new().max_connections(1)
+        .connect("sqlite::memory:").await.unwrap();
+    sqlite::init_schema(&pool).await;
+    pool
+}
+
 use sqlx::any::AnyPoolOptions;
 use sqlx::AnyPool;
 

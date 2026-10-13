@@ -4,6 +4,7 @@
 	import Icon from '@iconify/svelte';
 	import Navbar from '$lib/components/dashboard/Navbar.svelte';
 	import SpaceCard from '$lib/components/dashboard/SpaceCard.svelte';
+	import GitHubSyncModal from '$lib/components/GitHubSyncModal.svelte';
 
 	interface Space {
 		id: string;
@@ -18,8 +19,6 @@
 	let shared = $state<Space[]>([]);
 	let loading = $state(true);
 	let showCreate = $state(false);
-	let newName = $state('');
-	let creating = $state(false);
 
 	let activeMenu = $state<string | null>(null);
 	let showRename = $state(false);
@@ -62,21 +61,6 @@
 		loading = false;
 	}
 
-	async function create() {
-		if (!newName.trim()) return;
-		creating = true;
-		const res = await fetch('/api/spaces', {
-			method: 'POST',
-			headers: { 'Content-Type': 'application/json' },
-			body: JSON.stringify({ name: newName.trim() })
-		});
-		creating = false;
-		if (res.ok) {
-			const space = await res.json();
-			goto(`/space/${space.id}`);
-		}
-	}
-
 	async function remove(id: string, name: string) {
 		if (!confirm(`Delete space "${name}"? This cannot be undone.`)) return;
 		const res = await fetch(`/api/spaces/${id}`, { method: 'DELETE' });
@@ -87,7 +71,7 @@
 </script>
 
 <svelte:head>
-	<title>Spaces - TypstDrive</title>
+	<title>Projects - TypstDrive</title>
 </svelte:head>
 
 <svelte:window onclick={handleWindowClick} />
@@ -104,12 +88,12 @@
 				</button>
 				<h2 class="text-2xl font-bold text-gray-900 dark:text-white flex items-center gap-2">
 					<Icon icon="mdi:folder-multiple-outline" class="text-blue-500" />
-					Spaces
+					Projects
 				</h2>
 				<p class="text-sm text-gray-500 dark:text-gray-400 mt-1">Multi-file Typst workspaces with their own <code class="font-mono text-xs">typst.toml</code>.</p>
 			</div>
-			<button onclick={() => { showCreate = true; newName = ''; }} class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-2">
-				<Icon icon="mdi:plus" class="text-lg" /> New Space
+			<button onclick={() => { showCreate = true; }} class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 flex items-center gap-2">
+				<Icon icon="mdi:github" class="text-lg" /> Import GitHub project
 			</button>
 		</div>
 
@@ -162,18 +146,7 @@
 	</div>
 </div>
 
-{#if showCreate}
-	<div class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50" onclick={() => (showCreate = false)} role="presentation">
-		<div class="bg-[var(--theme-bg)] text-[var(--theme-text)] rounded-xl shadow-2xl border border-gray-200 dark:border-white/10 w-full max-w-md p-6" onclick={(e) => e.stopPropagation()} role="presentation">
-			<h2 class="text-lg font-bold mb-4 flex items-center gap-2"><Icon icon="mdi:folder-plus-outline" class="text-blue-500" /> New Space</h2>
-			<input bind:value={newName} placeholder="Space name" onkeydown={(e) => e.key === 'Enter' && create()} class="w-full px-3 py-2 rounded-lg border border-gray-300 dark:border-white/10 bg-transparent text-sm mb-4 focus:outline-none focus:ring-2 focus:ring-blue-500/40" />
-			<div class="flex justify-end gap-2">
-				<button onclick={() => (showCreate = false)} class="px-4 py-2 text-sm rounded-lg bg-gray-100 dark:bg-white/5 hover:bg-gray-200 dark:hover:bg-white/10">Cancel</button>
-				<button onclick={create} disabled={creating} class="px-4 py-2 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">Create</button>
-			</div>
-		</div>
-	</div>
-{/if}
+{#if showCreate}<GitHubSyncModal kind="project" importing={true} onClose={() => showCreate = false} />{/if}
 
 {#if showRename}
 	<div class="fixed inset-0 z-[9999] flex items-center justify-center bg-black/50" onclick={() => (showRename = false)} role="presentation">

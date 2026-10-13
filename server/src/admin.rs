@@ -124,6 +124,7 @@ pub async fn delete_user(
     jar: SignedCookieJar,
     Path(user_id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let requester_id = require_admin(&state, &jar).await?;
 
     if requester_id == user_id {
@@ -135,6 +136,11 @@ pub async fn delete_user(
         .execute(&state.db)
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    sqlx::query("DELETE FROM github_accounts WHERE user_id = ?")
+        .bind(&user_id).execute(&state.db).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+    state.github.pending.lock().await.retain(|_,pending|pending.user!=user_id);
 
     // Existing collaboration sockets must reauthenticate after account removal.
     for sender in state.access_revisions.lock().await.values() {

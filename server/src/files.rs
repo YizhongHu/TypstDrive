@@ -130,6 +130,7 @@ pub async fn delete_file(
     Path(id): Path<String>,
     jar: SignedCookieJar,
 ) -> Result<StatusCode, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
 
@@ -186,6 +187,7 @@ pub async fn update_file(
     jar: SignedCookieJar,
     Json(payload): Json<UpdateFileRequest>,
 ) -> Result<Json<File>, (StatusCode, String)> {
+    let _github_sync = state.github.sync_gate.lock().await;
     let user_id = jar.get("session_user_id").map(|c| c.value().to_string())
         .ok_or((StatusCode::UNAUTHORIZED, "Not logged in".to_string()))?;
 

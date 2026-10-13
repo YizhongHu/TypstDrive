@@ -63,9 +63,16 @@
 	}
 
 	async function loadFiles() {
+		const metadata = await fetch(`/api/spaces/${spaceId}`);
+		if (metadata.ok) { const space = await metadata.json(); entrypoint = space.entrypoint; spaceName = space.name; }
 		const res = await fetch(`/api/spaces/${spaceId}/files`);
 		if (!res.ok) return;
+		const previousFiles = files;
 		files = await res.json();
+		for (const f of previousFiles) {
+			if (!files.some(next => next.id === f.id && next.kind === "text")) closeFile(f.id);
+		}
+		if (!files.some(f => f.id === activeFileId)) activeFileId = "";
 
 		for (const f of files) {
 			if (f.kind === 'text') {

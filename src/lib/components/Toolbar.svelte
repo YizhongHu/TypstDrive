@@ -5,6 +5,7 @@
 	import { themes } from '../ts/themes';
 	import { goto } from '$app/navigation';
 	import ShareModal from './ShareModal.svelte';
+	import GitHubSyncModal from './GitHubSyncModal.svelte';
 	import PageSettingsModal from './PageSettingsModal.svelte';
 	import ThemePicker from './ThemePicker.svelte';
 	import PresentationMode from "./PresentationMode.svelte";
@@ -14,6 +15,7 @@
 	import { undo, redo } from '@codemirror/commands';
 
 	let isShareModalOpen = $state(false);
+	let isGitHubOpen = $state(false);
 	let isPageSettingsOpen = $state(false);
 	let isPresentationOpen = $state(false);
 	let fileInput = $state<HTMLInputElement | null>(null);
@@ -534,6 +536,7 @@
 
 			
 			{#if !isViewer}
+			<button onclick={() => isGitHubOpen = true} title="GitHub sync" class="flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 dark:text-gray-200 dark:bg-black/20 dark:hover:bg-white/10 rounded-md transition-colors"><Icon icon="mdi:github" class="text-[18px]" /> GitHub</button>
 			<button
 				onclick={() => (isPresentationOpen = true)}
 				class="flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 dark:text-gray-200 dark:bg-black/20 dark:hover:bg-white/10 rounded-md transition-colors"
@@ -841,3 +844,5 @@
 		</div>
 	</div>
 {/if}
+
+{#if isGitHubOpen && docId}<GitHubSyncModal kind="document" resourceId={docId} onClose={() => isGitHubOpen = false} />{/if}

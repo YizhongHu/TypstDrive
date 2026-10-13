@@ -11,6 +11,7 @@
 	} from '../../ts/store';
 	import { exportSpace } from '../../ts/typst-api';
 	import ThemePicker from '../ThemePicker.svelte';
+	import GitHubSyncModal from '../GitHubSyncModal.svelte';
 	import PageSettingsModal from '../PageSettingsModal.svelte';
 	import PresentationMode from '../PresentationMode.svelte';
 
@@ -37,6 +38,7 @@
 	} = $props();
 
 	let isViewer = $derived(role === 'viewer');
+	let isGitHubOpen = $state(false);
 
 	let uploadedFonts = $state<string[]>([]);
 	$effect(() => {
@@ -372,6 +374,7 @@
 			<div class="w-px h-5 bg-gray-300 dark:bg-white/10"></div>
 
 			{#if !isViewer}
+				<button onclick={() => isGitHubOpen = true} title="GitHub sync" class="flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 dark:text-gray-200 dark:bg-black/20 dark:hover:bg-white/10 rounded-md transition-colors"><Icon icon="mdi:github" class="text-[18px]" /> GitHub</button>
 				<button onclick={() => (isPresentationOpen = true)} class="flex items-center gap-1.5 px-3.5 py-1.5 text-sm font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 dark:text-gray-200 dark:bg-black/20 dark:hover:bg-white/10 rounded-md transition-colors">
 					<Icon icon="mdi:presentation-play" class="text-[16px]" /> Present
 				</button>
@@ -521,3 +524,5 @@
 		</div>
 	</div>
 {/if}
+
+{#if isGitHubOpen}<GitHubSyncModal kind="project" resourceId={spaceId} onClose={() => isGitHubOpen = false} onChanged={onFilesChanged} />{/if}

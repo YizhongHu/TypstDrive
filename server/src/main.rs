@@ -13,6 +13,7 @@ use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 mod permissions;
+mod github;
 mod admin;
 mod api_keys;
 mod auth;
@@ -38,6 +39,7 @@ pub type RateLimiterMap = Arc<Mutex<HashMap<String, (u32, std::time::Instant)>>>
 
 #[derive(Clone)]
 pub struct AppState {
+    pub github: Arc<github::Runtime>,
     pub compiler: Arc<Mutex<TypstCompiler>>,
     pub access_revisions: Arc<Mutex<HashMap<String, tokio::sync::watch::Sender<()>>>>,
     pub bcast_map: Arc<Mutex<HashMap<String, Arc<BroadcastGroup>>>>,
@@ -66,6 +68,7 @@ async fn main() {
     tracing::info!("Starting TypstDrive Server");
 
     let db = db::init_db().await;
+    github::init_schema(&db).await;
 
     
     let key = match std::env::var("COOKIE_SECRET") {
@@ -89,6 +92,7 @@ async fn main() {
         .unwrap_or(true);
 
     let state = AppState {
+        github: Arc::new(github::Runtime::default()),
         compiler: Arc::new(Mutex::new(TypstCompiler::new())),
         access_revisions: Arc::new(Mutex::new(HashMap::new())),
         bcast_map: Arc::new(Mutex::new(HashMap::new())),
@@ -99,6 +103,12 @@ async fn main() {
     };
 
     let api_routes = Router::new()
+        .route("/github/account", get(github::auth::status).delete(github::auth::disconnect))
+        .route("/github/connect", get(github::auth::start))
+        .route("/github/callback", get(github::auth::callback))
+        .route("/github/import", post(github::import))
+        .route("/github/links/{kind}/{id}", get(github::get_link).put(github::connect).delete(github::disconnect))
+        .route("/github/links/{kind}/{id}/sync", post(github::sync))
         .route("/setup", get(setup::setup_status).post(setup::run_setup))
         .route("/admin/users", get(admin::list_users).post(admin::create_user))
         .route("/admin/users/{id}", patch(admin::update_user).delete(admin::delete_user))

@@ -1,0 +1,33 @@
+import assert from 'node:assert/strict';
+const base=process.env.TEST_URL;
+assert(base?.includes('typst-permissions-test'),'Disposable test instance required');
+const password='disposable-local-test-credential';
+async function request(path,cookie='',method='GET',body){return fetch(base+path,{method,redirect:'manual',headers:{Cookie:cookie,'Content-Type':'application/json'},body:body===undefined?undefined:JSON.stringify(body)});}
+async function login(email){const r=await request('/api/auth/login','','POST',{email,password});assert.equal(r.status,200);return r.headers.get('set-cookie').split(';')[0];}
+const owner=await login('owner@example.invalid');
+let response=await request('/api/admin/users',owner,'POST',{username:'github-viewer',email:'github-viewer@example.invalid',password,is_admin:false});
+assert.equal(response.status,201);const viewerId=(await response.json()).id;
+const viewer=await login('github-viewer@example.invalid');
+assert.equal((await request('/api/github/account')).status,401);
+const account=await (await request('/api/github/account',owner)).json();
+assert.equal(account.configured,false);assert.equal(account.connected,false);assert(!('token' in account));assert(!('refresh_token' in account));
+response=await request('/api/docs',owner,'POST',{title:'GitHub role verification',content:'= Private sync controls'});
+assert.equal(response.status,200);const id=(await response.json()).id;
+assert.equal((await request(`/api/docs/${id}`,owner,'PATCH',{public_role:'viewer'})).status,200);
+const endpoint=`/api/github/links/document/${id}`;
+assert.equal((await (await request(endpoint,owner)).json()).linked,false);
+assert.equal((await request(endpoint)).status,401);
+assert.equal((await request(endpoint,viewer)).status,403);
+const target={owner:'synthetic',repository:'synthetic',branch:'main',source:'main.typ',dependencies:[]};
+assert.equal((await request(endpoint,viewer,'PUT',target)).status,403);
+assert.equal((await request(endpoint+'/sync',viewer,'POST',{action:'preview'})).status,403);
+assert.equal((await request(endpoint,owner,'PUT',{...target,source:'../secret.typ'})).status,400);
+assert.equal((await request('/api/github/connect',owner)).status,503);
+assert.equal((await request('/api/github/callback?code=synthetic&state=unknown',owner)).status,400);
+response=await request('/api/spaces',owner,'POST',{name:'Ownership test'});
+assert.equal(response.status,200);const space=(await response.json()).id;
+assert.equal((await request(`/api/spaces/${space}`,viewer,'DELETE')).status,404);
+assert.equal((await (await request(`/api/spaces/${space}/files`,owner)).json()).length,2);
+assert.equal((await request(`/api/spaces/${space}`,owner,'DELETE')).status,204);
+assert.equal((await request(`/api/admin/users/${viewerId}`,owner,'DELETE')).status,204);
+console.log('PASS: GitHub account privacy, viewer restrictions, setup boundary, path validation and project deletion ownership');
